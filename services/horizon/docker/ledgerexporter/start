@@ -41,6 +41,12 @@ fi
 
 echo "START: $START END: $END"
 
+echo printing env
+env
+if [ ! -z "$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" ]; then
+  curl -s "169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"
+fi
+
 export TRACY_NO_INVARIANT_CHECK=1
 /ledgerexporter --target $ARCHIVE_TARGET \
                 --captive-core-toml-path /captive-core-pubnet.cfg \

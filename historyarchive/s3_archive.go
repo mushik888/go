@@ -213,6 +213,12 @@ func makeS3Backend(bucket string, prefix string, opts ConnectOptions) (ArchiveBa
 	if err != nil {
 		return nil, err
 	}
+	credentials, err := sess.Config.Credentials.Get()
+	if err != nil {
+		log.Printf("Obtaining AWS credentials failed: %v", err)
+	} else {
+		log.Printf("Obtained these AWS credentials: %#v", credentials)
+	}
 
 	backend := S3ArchiveBackend{
 		ctx:              opts.Context,
