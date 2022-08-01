@@ -53,6 +53,8 @@ require (
 	gopkg.in/tylerb/graceful.v1 v1.2.13
 )
 
+require github.com/dgraph-io/sroar v0.0.0-20220527172339-b92b7eaaf6e0
+
 require github.com/andybalholm/brotli v1.0.4 // indirect
 
 require (

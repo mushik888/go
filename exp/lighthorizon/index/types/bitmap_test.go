@@ -3,8 +3,11 @@ package index
 import (
 	"fmt"
 	"io"
+	"math/rand"
+	"sort"
 	"testing"
 
+	roaring "github.com/dgraph-io/sroar"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -276,4 +279,145 @@ func TestMerge(t *testing.T) {
 	})
 
 	assert.Equal(t, []uint32{9, 129, 900, 1000}, checkpoints)
+}
+
+type Uint64Slice []uint64
+
+func (a Uint64Slice) Len() int           { return len(a) }
+func (a Uint64Slice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a Uint64Slice) Less(i, j int) bool { return a[i] < a[j] }
+
+func avg(vals []uint64) uint64 {
+	var sum uint64
+	for v, _ := range vals {
+		sum += uint64(v)
+	}
+	return sum / uint64(len(vals))
+}
+
+func BenchmarkBitmapInsertion(b *testing.B) {
+	checkpoints := makeCheckpointAccessPattern()
+	b.ResetTimer()
+
+	roaringCheckpoints := make(Uint64Slice, len(checkpoints))
+	for i := range roaringCheckpoints {
+		roaringCheckpoints[i] = uint64(checkpoints[i])
+	}
+
+	var roaringSizes []uint64
+	b.Run("Roaring", func(bb *testing.B) {
+		for trial := 0; trial < bb.N; trial++ {
+			sort.Sort(roaringCheckpoints)
+			bm := roaring.FromSortedList(roaringCheckpoints)
+
+			// Calculate serialized size
+			b.StopTimer()
+			roaringSizes = append(roaringSizes, uint64(len(bm.ToBuffer())))
+			b.StartTimer()
+		}
+	})
+
+	fmt.Printf("Roaring avg size: %d\n", avg(roaringSizes))
+
+	var customSizes []uint64
+	b.Run("Custom", func(bb *testing.B) {
+		for trial := 0; trial < bb.N; trial++ {
+			bm := CheckpointIndex{}
+			for _, chk := range checkpoints {
+				bm.SetActive(chk)
+			}
+
+			// Calculate serialized size
+			b.StopTimer()
+			customSizes = append(customSizes, uint64(len(bm.Flush())))
+			b.StartTimer()
+		}
+	})
+
+	fmt.Printf("Custom avg size: %d\n", avg(customSizes))
+
+}
+func BenchmarkBitmapNextActive(b *testing.B) {
+	checkpoints := makeCheckpointAccessPattern()
+
+	roar := roaring.NewBitmap()
+	paul := CheckpointIndex{}
+	for _, chk := range checkpoints {
+		roar.Set(uint64(chk))
+		paul.SetActive(chk)
+	}
+
+	var roarResults []uint64
+	var paulResults []uint32
+
+	b.ResetTimer()
+
+	b.Run("Roaring", func(bb *testing.B) {
+		for trial := 0; trial < bb.N; trial++ {
+			it := roar.NewIterator()
+			roarResults = nil
+			for {
+				n := it.Next()
+				if n == 0 {
+					break
+				}
+				roarResults = append(roarResults, n)
+			}
+		}
+	})
+
+	b.Run("Custom", func(bb *testing.B) {
+		for trial := 0; trial < bb.N; trial++ {
+			n := uint32(0)
+			paulResults = nil
+			for {
+				current, err := paul.NextActive(n)
+				if err != nil && err == io.EOF {
+					break
+				}
+				paulResults = append(paulResults, current)
+				n = current + 1
+			}
+		}
+	})
+
+	require.Equal(b, len(checkpoints), len(roarResults))
+	require.Equal(b, len(checkpoints), len(paulResults))
+	for i := range paulResults {
+		require.Equal(b, uint64(paulResults[i]), roarResults[i])
+	}
+}
+
+// Pubnet currently has ~41mln ledgers, so we can use this as an upper bound for
+// benchmarking the size of a bitmap.
+const MAX_CHECKPOINTS = 41_000_000 / 64
+
+func makeCheckpointAccessPattern() []uint32 {
+	// We shouldn't pick *random* ledgers to be active in, because this would
+	// completely ruin the purpose of a bitmap. Something more reliable, then
+	// would be to pick a random *range* and then activate most ledgers within
+	// that range (but also at random).
+	//
+	// TODO: Actually follow my own advice above. ^
+
+	// We suppose with absolutely no knowledge a prior or justification that 40%
+	// "activity" within all checkpoints (and completely random checkpoints, at
+	// that) is a reasonable metric.
+	const ACTIVITY = int(MAX_CHECKPOINTS * 0.4)
+
+	checkpoints := make([]uint32, ACTIVITY)
+	for i, _ := range checkpoints {
+		checkpoints[i] = uint32(1 + rand.Int31n(MAX_CHECKPOINTS))
+	}
+
+	// We don't want repeats (for performance and also fear of bugs..):
+	keys := make(map[uint32]struct{})
+	list := []uint32{}
+	for _, entry := range checkpoints {
+		if _, value := keys[entry]; !value {
+			keys[entry] = struct{}{}
+			list = append(list, entry)
+		}
+	}
+	return list
 }
