@@ -36,10 +36,11 @@ func (h Handler) Close() {
 }
 
 type HandlerParams struct {
-	AccountStore     methods.AccountStore
-	TransactionProxy *methods.TransactionProxy
-	CoreClient       *stellarcore.Client
-	Logger           *log.Entry
+	AccountStore      methods.AccountStore
+	TransactionProxy  *methods.TransactionProxy
+	CoreClient        *stellarcore.Client
+	Logger            *log.Entry
+	NetworkPassphrase string
 }
 
 // NewJSONRPCHandler constructs a Handler instance
@@ -49,7 +50,7 @@ func NewJSONRPCHandler(params HandlerParams) (Handler, error) {
 		"getAccount":           methods.NewAccountHandler(params.AccountStore),
 		"getTransactionStatus": methods.NewGetTransactionStatusHandler(params.TransactionProxy),
 		"sendTransaction":      methods.NewSendTransactionHandler(params.TransactionProxy),
-		"simulateTransaction":  methods.NewSimulateTransactionHandler(params.Logger, params.CoreClient),
+		"simulateTransaction":  methods.NewSimulateTransactionHandler(params.Logger, params.NetworkPassphrase),
 		"getContractData":      methods.NewGetContractDataHandler(params.Logger, params.CoreClient),
 	}, nil)
 	corsMiddleware := cors.New(cors.Options{
