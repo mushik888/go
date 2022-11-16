@@ -19,13 +19,11 @@ import (
 // This assumes that the Rust compiler should be using a -gnu target (i.e. MinGW compiler) in Windows
 // (I (fons) am not even sure if CGo supports MSVC, see https://github.com/golang/go/issues/20982)
 #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-pc-windows-gnu/release/ -lpreflight -ldl -lm -static -lws2_32 -lbcrypt -luserenv
-// You cannot compile with -static in macOS
+// You cannot compile with -static in macOS (and it's not worth it in Linux, at least with glibc)
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-apple-darwin/release/ -lpreflight -ldl -lm
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/aarch64-apple-darwin/release/ -lpreflight -ldl -lm
-// TODO: We compile statically for Linux, but maybe there's no point when using glibc, see https://github.com/2opremio/soroban-go-rust-preflight-poc/issues
-//       We should probably use musl instead of glibc.
-#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-gnu/release/ -lpreflight -ldl -lm -static
-#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/aarch64-unknown-linux-gnu/release/ -lpreflight -ldl -lm -static
+#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-musl/release/ -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-gnu/release/ -lpreflight -ldl -lm
+#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/aarch64-unknown-linux-musl/release/ -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-gnu/release/ -lpreflight -ldl -lm
 */
 import "C"
 
