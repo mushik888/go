@@ -1,5 +1,9 @@
 name: Soroban RPC
 
+defaults:
+  run:
+    shell: bash
+
 on:
   push:
     branches: [master]
@@ -15,7 +19,7 @@ jobs:
           - os: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
             go_arch: amd64
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             rust_target: aarch64-unknown-linux-gnu
             go_arch: arm64
           - os: macos-latest
@@ -52,12 +56,13 @@ jobs:
         name: Install C cross-compilation toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-11-aarch64-linux-gnu
-          echo 'CC=aarch64-linux-gnu-gcc-11' >> $GITHUB_ENV]
+          sudo apt-get install -y gcc-10-aarch64-linux-gnu
+          echo 'CC=aarch64-linux-gnu-gcc-10' >> $GITHUB_ENV
 
       - name: Build Soroban RPC reproducible build
         run: |
-          cd ./exp/services/soroban-rpc && make
+          CARGO_BUILD_TARGET=${{ matrix.rust_target }} go generate ./exp/services/soroban-rpc/...
+          CGO_ENABLED=1 GOARCH=${{ matrix.go_arch }} go build -v -trimpath -buildvcs=false ./exp/services/soroban-rpc
           touch empty
 
       # Since we need to install Captive Core, only run tests on x86_64-unknown-linux-gnu
