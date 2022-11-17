@@ -124,6 +124,8 @@ pub extern "C" fn preflight_host_function(
     ledger_info: CLedgerInfo,
 ) -> *mut CPreflightResult
 {
+    // catch panics before they reach foreign callers (which otherwise would result in
+    // undefined behavior)
     let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
         preflight_host_function_or_maybe_panic(
             hf,
