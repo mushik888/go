@@ -7,6 +7,7 @@ use soroban_env_host::storage::{self, AccessType, SnapshotSource, Storage};
 use soroban_env_host::xdr::{self, AccountId, HostFunction, LedgerEntry, LedgerKey, ReadXdr, ScHostStorageErrorCode, ScVec, WriteXdr};
 use soroban_env_host::{Host, HostError, LedgerInfo};
 use std::ffi::{CStr, CString};
+use std::panic;
 use std::ptr::null_mut;
 use std::rc::Rc;
 use xdr::LedgerFootprint;
@@ -117,6 +118,35 @@ fn preflight_error(str: String) -> *mut CPreflightResult {
 
 #[no_mangle]
 pub extern "C" fn preflight_host_function(
+    hf: *const libc::c_char,   // HostFunction XDR in base64
+    args: *const libc::c_char, // ScVec XDR in base64
+    source_account: *const libc::c_char, // AccountId XDR in base64
+    ledger_info: CLedgerInfo,
+) -> *mut CPreflightResult
+{
+    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        preflight_host_function_or_maybe_panic(
+            hf,
+            args,
+            source_account,
+            ledger_info,
+        )
+    }));
+    match res {
+        Err(panic) =>
+            match panic.downcast::<String>() {
+                Ok(panic_msg) => {
+                    preflight_error(format!("panic during preflight_host_function() call: {}", panic_msg))
+                }
+                Err(_) => {
+                    preflight_error("panic during preflight_host_function() call: unknown cause".to_string())
+                }
+            },
+        Ok(r) => r,
+    }
+}
+
+fn preflight_host_function_or_maybe_panic(
     hf: *const libc::c_char,   // HostFunction XDR in base64
     args: *const libc::c_char, // ScVec XDR in base64
     source_account: *const libc::c_char, // AccountId XDR in base64
