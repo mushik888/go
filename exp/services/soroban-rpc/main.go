@@ -118,6 +118,7 @@ func main() {
 
 			handler, err := internal.NewJSONRPCHandler(internal.HandlerParams{
 				AccountStore:     methods.AccountStore{Client: hc},
+				EventStore:       methods.EventStore{Client: hc},
 				Logger:           logger,
 				TransactionProxy: transactionProxy,
 				CoreClient:       &stellarcore.Client{URL: stellarCoreURL},

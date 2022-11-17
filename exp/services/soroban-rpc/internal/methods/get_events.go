@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/creachadair/jrpc2"
@@ -17,8 +19,11 @@ import (
 	"github.com/stellar/go/xdr"
 )
 
+// TODO: Pick and document a max here. Paul just guessed 4320 as it is ~6hrs
+const MAX_LEDGER_RANGE = 4320
+
 type EventInfo struct {
-	Ledger         string         `json:"ledger"`
+	Ledger         int32          `json:"ledger,string"`
 	LedgerClosedAt string         `json:"ledgerClosedAt"`
 	ContractID     string         `json:"contractId"`
 	ID             string         `json:"id"`
@@ -32,15 +37,21 @@ type EventInfoValue struct {
 }
 
 type GetEventsRequest struct {
-	StartLedger string             `json:"startLedger"`
-	EndLedger   string             `json:"endLedger"`
+	StartLedger int32              `json:"startLedger,string"`
+	EndLedger   int32              `json:"endLedger,string"`
 	Filters     []EventFilter      `json:"filters"`
 	Pagination  *PaginationOptions `json:"pagination,omitempty"`
 }
 
 func (g *GetEventsRequest) Valid() error {
 	// Validate start & end ledger
-	// TODO: Parse ledgers and enforce max range here.
+	// Validate the ledger range min/max
+	if g.EndLedger < g.StartLedger {
+		return errors.New("endLedger must be after or the same as startLedger")
+	}
+	if g.EndLedger-g.StartLedger > MAX_LEDGER_RANGE {
+		return fmt.Errorf("endLedger must be less than %d ledgers after startLedger", MAX_LEDGER_RANGE)
+	}
 
 	// Validate filters
 	if len(g.Filters) > 5 {
@@ -64,6 +75,9 @@ func (g *GetEventsRequest) Matches(event xdr.ContractEvent) bool {
 		// TODO: again, system events?
 		return false
 	}
+	if len(g.Filters) == 0 {
+		return true
+	}
 	for _, filter := range g.Filters {
 		if filter.Matches(event) {
 			return true
@@ -73,8 +87,8 @@ func (g *GetEventsRequest) Matches(event xdr.ContractEvent) bool {
 }
 
 type EventFilter struct {
-	ContractIDs []string `json:"contractIds"`
-	Topics      []string `json:"topics"`
+	ContractIDs []string      `json:"contractIds"`
+	Topics      []TopicFilter `json:"topics"`
 }
 
 func (e *EventFilter) Valid() error {
@@ -90,9 +104,106 @@ func (e *EventFilter) Valid() error {
 	return nil
 }
 
+// TODO: Implement this more efficiently (ideally do it in the real data backend)
 func (e *EventFilter) Matches(event xdr.ContractEvent) bool {
-	// TODO: Implement this more efficiently (ideally do it in the real data backend)
-	return true
+	return e.matchesContractIDs(event) && e.matchesTopics(event)
+}
+
+func (e *EventFilter) matchesContractIDs(event xdr.ContractEvent) bool {
+	if len(e.ContractIDs) == 0 {
+		return true
+	}
+	if event.ContractId == nil {
+		return false
+	}
+	needle := hex.EncodeToString((*event.ContractId)[:])
+	for _, id := range e.ContractIDs {
+		if id == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *EventFilter) matchesTopics(event xdr.ContractEvent) bool {
+	if len(e.Topics) == 0 {
+		return true
+	}
+	v0 := event.Body.MustV0()
+	for _, topicFilter := range e.Topics {
+		if topicFilter.Matches(v0.Topics) {
+			return true
+		}
+	}
+	return false
+}
+
+type TopicFilter []SegmentFilter
+
+type SegmentFilter struct {
+	wildcard *string
+	scval    *xdr.ScVal
+}
+
+func (s *SegmentFilter) UnmarshalJSON(p []byte) error {
+	var tmp string
+	if err := json.Unmarshal(p, &tmp); err != nil {
+		return err
+	}
+	switch tmp {
+	case "*", "#":
+		s.wildcard = &tmp
+	default:
+		_, err := xdr.Unmarshal(
+			base64.NewDecoder(base64.URLEncoding, strings.NewReader(tmp)),
+			s.scval,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t TopicFilter) Matches(event []xdr.ScVal) bool {
+	// TODO: Implement this
+	for segmentFilterIndex, segmentFilter := range t {
+		if segmentFilter.wildcard != nil {
+			switch *segmentFilter.wildcard {
+			case "*":
+				// one-segment wildcard
+				if len(event) == 0 {
+					// Nothing to match, need one segment.
+					return false
+				}
+				// Ignore this token
+				event = event[1:]
+			case "#":
+				// 0+ segment wildcard
+				if segmentFilterIndex == len(t)-1 {
+					// This is the last segmentFilter, so consume everything
+					return true
+				}
+				// Try consuming more and more until the remainder matches
+				for i := 0; i < len(event); i++ {
+					if t[segmentFilterIndex+1:].Matches(event[i:]) {
+						return true
+					}
+				}
+				return false
+			}
+		} else if segmentFilter.scval == nil {
+			panic("invalid segmentFilter")
+		} else {
+			// Exact match the scval
+			if len(event) == 0 || !segmentFilter.scval.Equals(event[0]) {
+				return false
+			}
+			event = event[1:]
+		}
+	}
+	// Check we had no leftovers
+	return len(event) == 0
 }
 
 type PaginationOptions struct {
@@ -108,96 +219,108 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 	if err := request.Valid(); err != nil {
 		return nil, err
 	}
+
+	var results []EventInfo
+
 	// TODO: Use a more efficient backend here. For now, we stream all ledgers in
 	// the range from horizon, and filter them. This sucks.
 	// TODO: Repeated requests to paginate through all results up to limit.
-	cursor := request.StartLedger // TODO: Convert this to a txn cursor
-	transactions, err := a.Client.Transactions(horizonclient.TransactionRequest{
-		Order:         horizonclient.Order("asc"),
-		Cursor:        cursor,
-		Limit:         200,
-		IncludeFailed: false,
-	})
-	if err != nil {
-		// TODO: Better error handling/retry here
-		return nil, err
-	}
-
-	var results []EventInfo
-	for transactionIndex, transaction := range transactions.Embedded.Records {
-		metaBase64 := transaction.ResultMetaXdr
-		metaBytes, err := base64.URLEncoding.DecodeString(metaBase64)
+	cursor := toid.New(request.StartLedger, 0, 0).String()
+	for {
+		transactions, err := a.Client.Transactions(horizonclient.TransactionRequest{
+			Order:         horizonclient.Order("asc"),
+			Cursor:        cursor,
+			Limit:         200,
+			IncludeFailed: false,
+		})
 		if err != nil {
-			// Invalid meta back. Eek!
-			// TODO: Better error handling here
-			return nil, err
-		}
-		var meta xdr.TransactionMeta
-		if _, err := xdr.Unmarshal(bytes.NewReader(metaBytes), &meta); err != nil {
-			// Invalid meta back. Eek!
-			// TODO: Better error handling here
+			// TODO: Better error handling/retry here
 			return nil, err
 		}
 
-		v3, ok := meta.GetV3()
-		if !ok {
-			continue
+		if len(transactions.Embedded.Records) == 0 {
+			// No transactions found??
+			return nil, fmt.Errorf("no transactions found at cursor: %s", cursor)
 		}
 
-		ledger := fmt.Sprint(transaction.Ledger)
-		ledgerClosedAt := transaction.LedgerCloseTime.Format(time.RFC3339)
+		for transactionIndex, transaction := range transactions.Embedded.Records {
+			if transaction.Ledger > request.EndLedger {
+				return results, nil
+			}
+			cursor = transaction.PagingToken()
+			metaBase64 := transaction.ResultMetaXdr
+			metaBytes, err := base64.URLEncoding.DecodeString(metaBase64)
+			if err != nil {
+				// Invalid meta back. Eek!
+				// TODO: Better error handling here
+				return nil, err
+			}
+			var meta xdr.TransactionMeta
+			if _, err := xdr.Unmarshal(bytes.NewReader(metaBytes), &meta); err != nil {
+				// Invalid meta back. Eek!
+				// TODO: Better error handling here
+				return nil, err
+			}
 
-		// TODO: Handle nested events list once
-		// https://github.com/stellar/stellar-xdr/pull/52 is merged. For now the
-		// operationIndex here is a placeholder. There is only one operation for
-		// now, so we can use that assumption to build the event id correctly.
-		operationIndex := 0
+			v3, ok := meta.GetV3()
+			if !ok {
+				continue
+			}
 
-		for eventIndex, event := range v3.Events {
-			if request.Matches(event) {
-				v0 := event.Body.MustV0()
-				// Build a lexically order-able id for this event record. This is
-				// based on Horizon's db2/history.Effect.ID method.
-				id := fmt.Sprintf(
-					"%019d-%010d",
-					toid.New(
-						transaction.Ledger,
-						int32(transactionIndex+1),
-						int32(operationIndex+1),
-					),
-					eventIndex+1,
-				)
+			ledger := transaction.Ledger
+			ledgerClosedAt := transaction.LedgerCloseTime.Format(time.RFC3339)
 
-				// base64-xdr encode the topic
-				topic := make([]string, 4)
-				for _, segment := range v0.Topics {
-					seg, err := xdrMarshalBase64(segment)
+			// TODO: Handle nested events list once
+			// https://github.com/stellar/stellar-xdr/pull/52 is merged. For now the
+			// operationIndex here is a placeholder. There is only one operation for
+			// now, so we can use that assumption to build the event id correctly.
+			operationIndex := 0
+
+			for eventIndex, event := range v3.Events {
+				if request.Matches(event) {
+					v0 := event.Body.MustV0()
+
+					// Build a lexically order-able id for this event record. This is
+					// based on Horizon's db2/history.Effect.ID method.
+					id := fmt.Sprintf(
+						"%019d-%010d",
+						toid.New(
+							transaction.Ledger,
+							int32(transactionIndex+1),
+							int32(operationIndex+1),
+						),
+						eventIndex+1,
+					)
+
+					// base64-xdr encode the topic
+					topic := make([]string, 4)
+					for _, segment := range v0.Topics {
+						seg, err := xdrMarshalBase64(segment)
+						if err != nil {
+							return nil, err
+						}
+						topic = append(topic, seg)
+					}
+
+					// base64-xdr encode the data
+					data, err := xdrMarshalBase64(v0.Data)
 					if err != nil {
 						return nil, err
 					}
-					topic = append(topic, seg)
-				}
 
-				// base64-xdr encode the data
-				data, err := xdrMarshalBase64(v0.Data)
-				if err != nil {
-					return nil, err
+					results = append(results, EventInfo{
+						Ledger:         ledger,
+						LedgerClosedAt: ledgerClosedAt,
+						ContractID:     hex.EncodeToString((*event.ContractId)[:]),
+						ID:             id,
+						PagingToken:    id,
+						Topic:          topic,
+						Value:          EventInfoValue{XDR: data},
+					})
 				}
-
-				results = append(results, EventInfo{
-					Ledger:         ledger,
-					LedgerClosedAt: ledgerClosedAt,
-					ContractID:     hex.EncodeToString((*event.ContractId)[:]),
-					ID:             id,
-					PagingToken:    id,
-					Topic:          topic,
-					Value:          EventInfoValue{XDR: data},
-				})
 			}
 		}
 	}
-
-	return results, nil
 }
 
 // TODO: Is there an off-the-shelf way to do this?

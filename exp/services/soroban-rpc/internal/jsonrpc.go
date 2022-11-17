@@ -37,6 +37,7 @@ func (h Handler) Close() {
 
 type HandlerParams struct {
 	AccountStore     methods.AccountStore
+	EventStore       methods.EventStore
 	TransactionProxy *methods.TransactionProxy
 	CoreClient       *stellarcore.Client
 	Logger           *log.Entry
