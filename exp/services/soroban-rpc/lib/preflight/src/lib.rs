@@ -153,8 +153,6 @@ fn preflight_host_function_or_maybe_panic(
     ledger_info: CLedgerInfo,
 ) -> *mut CPreflightResult
 {
-    // TODO: remove debug printout
-    println!("gets to preflight_host_function()");
     let hf_cstr = unsafe { CStr::from_ptr(hf) };
     let hf = match HostFunction::from_xdr_base64(hf_cstr.to_str().unwrap()) {
         Ok(hf) => hf,
@@ -170,7 +168,6 @@ fn preflight_host_function_or_maybe_panic(
         Ok(account_id) => account_id,
         Err(err) => return preflight_error(format!("decoding account_id: {}", err)),
     };
-    println!("  arguments parsed");
     let src = Rc::new(CSnapshotSource);
     let storage = Storage::with_recording_footprint(src);
     let budget = Budget::default();
@@ -179,16 +176,13 @@ fn preflight_host_function_or_maybe_panic(
     host.set_source_account(source_account);
     host.set_ledger_info(ledger_info.into());
 
-    println!("  about to run preflight");
     // Run the preflight.
     let res = host.invoke_function(hf, args);
 
-    println!("  about to finish preflight");
     // Recover, convert and return the storage footprint and other values to C.
     let (storage, budget, _) = match host.try_finish() {
         Ok(v) => v,
         Err(err) => {
-            println!("  preflight errored");
             return preflight_error(format!("{:?}", err));
         }
     };
@@ -198,14 +192,12 @@ fn preflight_host_function_or_maybe_panic(
         Err(err) => return preflight_error(err.to_string()),
     };
 
-    println!("  about to get footprint");
     let fp = match storage_footprint_to_ledger_footprint(&storage.footprint) {
         Ok(fp) => fp,
         Err(err) => {
             return preflight_error(err.to_string());
         }
     };
-    println!("  about to return values");
     let fp_cstr =  CString::new(fp.to_xdr_base64().unwrap()).unwrap();
     let result_cstr = CString::new(result.to_xdr_base64().unwrap()).unwrap();
     // transfer ownership to caller
