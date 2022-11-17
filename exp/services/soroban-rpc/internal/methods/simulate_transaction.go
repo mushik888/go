@@ -23,10 +23,10 @@ import (
 // You cannot compile with -static in macOS (and it's not worth it in Linux, at least with glibc)
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-apple-darwin/release/ -lpreflight -ldl -lm
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/aarch64-apple-darwin/release/ -lpreflight -ldl -lm
-// For now, we will be dynamically linking glibc. See https://github.com/2opremio/soroban-go-rust-preflight-poc/issues/3 for details
+// In Linux, at least for now, we will be dynamically linking glibc. See https://github.com/2opremio/soroban-go-rust-preflight-poc/issues/3 for details
 // I (fons) did try linking statically against musl but it caused problems catching (unwinding) Rust panics.
-#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-musl/release/ -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-gnu/release/ -lpreflight -ldl -lm
-#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/aarch64-unknown-linux-musl/release/ -L${SRCDIR}/../../lib/preflight/target/aarch64-unknown-linux-gnu/release/ -lpreflight -ldl -lm
+#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/x86_64-unknown-linux-gnu/release/ -lpreflight -ldl -lm
+#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../lib/preflight/target/aarch64-unknown-linux-gnu/release/ -lpreflight -ldl -lm
 */
 import "C"
 
