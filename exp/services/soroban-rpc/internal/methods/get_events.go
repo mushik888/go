@@ -1,13 +1,10 @@
 package methods
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/creachadair/jrpc2"
@@ -154,11 +151,7 @@ func (s *SegmentFilter) UnmarshalJSON(p []byte) error {
 	case "*", "#":
 		s.wildcard = &tmp
 	default:
-		_, err := xdr.Unmarshal(
-			base64.NewDecoder(base64.URLEncoding, strings.NewReader(tmp)),
-			s.scval,
-		)
-		if err != nil {
+		if err := xdr.SafeUnmarshalBase64(tmp, s.scval); err != nil {
 			return err
 		}
 	}
@@ -166,7 +159,6 @@ func (s *SegmentFilter) UnmarshalJSON(p []byte) error {
 }
 
 func (t TopicFilter) Matches(event []xdr.ScVal) bool {
-	// TODO: Implement this
 	for segmentFilterIndex, segmentFilter := range t {
 		if segmentFilter.wildcard != nil {
 			switch *segmentFilter.wildcard {
@@ -224,7 +216,6 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 
 	// TODO: Use a more efficient backend here. For now, we stream all ledgers in
 	// the range from horizon, and filter them. This sucks.
-	// TODO: Repeated requests to paginate through all results up to limit.
 	cursor := toid.New(request.StartLedger, 0, 0).String()
 	for {
 		transactions, err := a.Client.Transactions(horizonclient.TransactionRequest{
@@ -248,15 +239,8 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 				return results, nil
 			}
 			cursor = transaction.PagingToken()
-			metaBase64 := transaction.ResultMetaXdr
-			metaBytes, err := base64.URLEncoding.DecodeString(metaBase64)
-			if err != nil {
-				// Invalid meta back. Eek!
-				// TODO: Better error handling here
-				return nil, err
-			}
 			var meta xdr.TransactionMeta
-			if _, err := xdr.Unmarshal(bytes.NewReader(metaBytes), &meta); err != nil {
+			if err := xdr.SafeUnmarshalBase64(transaction.ResultMetaXdr, &meta); err != nil {
 				// Invalid meta back. Eek!
 				// TODO: Better error handling here
 				return nil, err
@@ -295,7 +279,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 					// base64-xdr encode the topic
 					topic := make([]string, 4)
 					for _, segment := range v0.Topics {
-						seg, err := xdrMarshalBase64(segment)
+						seg, err := xdr.MarshalBase64(segment)
 						if err != nil {
 							return nil, err
 						}
@@ -303,7 +287,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 					}
 
 					// base64-xdr encode the data
-					data, err := xdrMarshalBase64(v0.Data)
+					data, err := xdr.MarshalBase64(v0.Data)
 					if err != nil {
 						return nil, err
 					}
@@ -321,16 +305,6 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 			}
 		}
 	}
-}
-
-// TODO: Is there an off-the-shelf way to do this?
-func xdrMarshalBase64(src interface{}) (string, error) {
-	var buf bytes.Buffer
-	_, err := xdr.Marshal(&buf, src)
-	if err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(buf.Bytes()), nil
 }
 
 // NewGetEventsHandler returns a json rpc handler to fetch and filter events
