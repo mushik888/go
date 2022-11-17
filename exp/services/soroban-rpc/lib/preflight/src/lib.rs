@@ -123,8 +123,9 @@ pub extern "C" fn preflight_host_function(
     ledger_info: CLedgerInfo,
 ) -> *mut CPreflightResult
 {
+    // TODO: remove debug printout
+    println!("gets to preflight_host_function()");
     let hf_cstr = unsafe { CStr::from_ptr(hf) };
-    // TODO: remove _all_ the unwraps() around XDR decoding
     let hf = match HostFunction::from_xdr_base64(hf_cstr.to_str().unwrap()) {
         Ok(hf) => hf,
         Err(err) => return preflight_error(format!("decoding host function: {}", err)),

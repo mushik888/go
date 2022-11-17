@@ -2,6 +2,7 @@ package methods
 
 import (
 	"context"
+	"fmt"
 	"unsafe"
 
 	"github.com/stellar/go/support/log"
@@ -33,6 +34,7 @@ import "C"
 //export SnapshotSourceGet
 func SnapshotSourceGet(ledger_key *C.char) *C.char {
 	// TODO: we need a way to obtain raw ledger entries
+	fmt.Println("gets to SnapshotSourceGet()")
 	return nil
 }
 
