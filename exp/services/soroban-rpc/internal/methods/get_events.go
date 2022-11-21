@@ -178,10 +178,12 @@ func (t TopicFilter) Matches(event []xdr.ScVal) bool {
 					return true
 				}
 				// Try consuming more and more until the remainder matches
-				for i := 0; i < len(event); i++ {
+				i := 0
+				for ok := true; ok; ok = i < len(event) {
 					if t[segmentFilterIndex+1:].Matches(event[i:]) {
 						return true
 					}
+					i++
 				}
 				return false
 			}
