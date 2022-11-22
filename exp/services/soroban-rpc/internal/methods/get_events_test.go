@@ -214,3 +214,101 @@ func topicFilterToString(t TopicFilter) string {
 	}
 	return strings.Join(s, "/")
 }
+
+func TestGetEventsRequestValid(t *testing.T) {
+	assert.NoError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters:     []EventFilter{},
+		Pagination:  nil,
+	}).Valid())
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 1,
+		EndLedger:   0,
+		Filters:     []EventFilter{},
+		Pagination:  nil,
+	}).Valid(), "endLedger must be after or the same as startLedger")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   4321,
+		Filters:     []EventFilter{},
+		Pagination:  nil,
+	}).Valid(), "endLedger must be less than 4320 ledgers after startLedger")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
+			{}, {}, {}, {}, {}, {},
+		},
+		Pagination: nil,
+	}).Valid(), "maximum 5 filters per request")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
+			{ContractIDs: []string{
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+				"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			}},
+		},
+		Pagination: nil,
+	}).Valid(), "filter 1 invalid: maximum 5 contract IDs per filter")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
+			{ContractIDs: []string{"a"}},
+		},
+		Pagination: nil,
+	}).Valid(), "filter 1 invalid: contract ID 1 invalid")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
+			{
+				Topics: []TopicFilter{
+					{}, {}, {}, {}, {}, {},
+				},
+			},
+		},
+		Pagination: nil,
+	}).Valid(), "filter 1 invalid: maximum 5 topics per filter")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
+			{Topics: []TopicFilter{
+				{},
+			}},
+		},
+		Pagination: nil,
+	}).Valid(), "filter 1 invalid: topic 1 invalid: topic must have at least one segment")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
+			{Topics: []TopicFilter{
+				{
+					{},
+					{},
+					{},
+					{},
+					{},
+				},
+			}},
+		},
+		Pagination: nil,
+	}).Valid(), "filter 1 invalid: topic 1 invalid: topic cannot have more than 4 segments")
+}

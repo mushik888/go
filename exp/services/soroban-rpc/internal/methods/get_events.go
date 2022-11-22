@@ -57,7 +57,7 @@ func (g *GetEventsRequest) Valid() error {
 	}
 	for i, filter := range g.Filters {
 		if err := filter.Valid(); err != nil {
-			return errors.Wrapf(err, "invalid filter %d", i)
+			return errors.Wrapf(err, "filter %d invalid", i+1)
 		}
 	}
 
@@ -93,11 +93,19 @@ func (e *EventFilter) Valid() error {
 	if len(e.ContractIDs) > 5 {
 		return errors.New("maximum 5 contract IDs per filter")
 	}
-	if len(e.Topics) < 1 {
-		return errors.New("topic must have at least one segment")
+	if len(e.Topics) > 5 {
+		return errors.New("maximum 5 topics per filter")
 	}
-	if len(e.Topics) > 4 {
-		return errors.New("topic cannot have more than 4 segments")
+	for i, id := range e.ContractIDs {
+		out, err := hex.DecodeString(id)
+		if err != nil || len(out) != 32 {
+			return fmt.Errorf("contract ID %d invalid", i+1)
+		}
+	}
+	for i, topic := range e.Topics {
+		if err := topic.Valid(); err != nil {
+			return errors.Wrapf(err, "topic %d invalid", i+1)
+		}
 	}
 	return nil
 }
@@ -138,27 +146,12 @@ func (e *EventFilter) matchesTopics(event xdr.ContractEvent) bool {
 
 type TopicFilter []SegmentFilter
 
-type SegmentFilter struct {
-	wildcard *string
-	scval    *xdr.ScVal
-}
-
-func (s *SegmentFilter) UnmarshalJSON(p []byte) error {
-	s.wildcard = nil
-	s.scval = nil
-
-	var tmp string
-	if err := json.Unmarshal(p, &tmp); err != nil {
-		return err
+func (t *TopicFilter) Valid() error {
+	if len(*t) < 1 {
+		return errors.New("topic must have at least one segment")
 	}
-	if tmp == "*" {
-		s.wildcard = &tmp
-	} else {
-		var out xdr.ScVal
-		if err := xdr.SafeUnmarshalBase64(tmp, &out); err != nil {
-			return err
-		}
-		s.scval = &out
+	if len(*t) > 4 {
+		return errors.New("topic cannot have more than 4 segments")
 	}
 	return nil
 }
@@ -190,6 +183,31 @@ func (t TopicFilter) Matches(event []xdr.ScVal) bool {
 	}
 	// Check we had no leftovers
 	return len(event) == 0
+}
+
+type SegmentFilter struct {
+	wildcard *string
+	scval    *xdr.ScVal
+}
+
+func (s *SegmentFilter) UnmarshalJSON(p []byte) error {
+	s.wildcard = nil
+	s.scval = nil
+
+	var tmp string
+	if err := json.Unmarshal(p, &tmp); err != nil {
+		return err
+	}
+	if tmp == "*" {
+		s.wildcard = &tmp
+	} else {
+		var out xdr.ScVal
+		if err := xdr.SafeUnmarshalBase64(tmp, &out); err != nil {
+			return err
+		}
+		s.scval = &out
+	}
+	return nil
 }
 
 type PaginationOptions struct {
