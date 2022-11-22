@@ -144,23 +144,27 @@ type SegmentFilter struct {
 }
 
 func (s *SegmentFilter) UnmarshalJSON(p []byte) error {
+	s.wildcard = nil
+	s.scval = nil
+
 	var tmp string
 	if err := json.Unmarshal(p, &tmp); err != nil {
 		return err
 	}
-	switch tmp {
-	case "*", "#":
+	if tmp == "*" {
 		s.wildcard = &tmp
-	default:
-		if err := xdr.SafeUnmarshalBase64(tmp, s.scval); err != nil {
+	} else {
+		var out xdr.ScVal
+		if err := xdr.SafeUnmarshalBase64(tmp, &out); err != nil {
 			return err
 		}
+		s.scval = &out
 	}
 	return nil
 }
 
 func (t TopicFilter) Matches(event []xdr.ScVal) bool {
-	for segmentFilterIndex, segmentFilter := range t {
+	for _, segmentFilter := range t {
 		if segmentFilter.wildcard != nil {
 			switch *segmentFilter.wildcard {
 			case "*":
@@ -171,30 +175,17 @@ func (t TopicFilter) Matches(event []xdr.ScVal) bool {
 				}
 				// Ignore this token
 				event = event[1:]
-			case "#":
-				// 0+ segment wildcard
-				if segmentFilterIndex == len(t)-1 {
-					// This is the last segmentFilter, so consume everything
-					return true
-				}
-				// Try consuming more and more until the remainder matches
-				i := 0
-				for ok := true; ok; ok = i < len(event) {
-					if t[segmentFilterIndex+1:].Matches(event[i:]) {
-						return true
-					}
-					i++
-				}
-				return false
+			default:
+				panic("invalid segmentFilter")
 			}
-		} else if segmentFilter.scval == nil {
-			panic("invalid segmentFilter")
-		} else {
+		} else if segmentFilter.scval != nil {
 			// Exact match the scval
 			if len(event) == 0 || !segmentFilter.scval.Equals(event[0]) {
 				return false
 			}
 			event = event[1:]
+		} else {
+			panic("invalid segmentFilter")
 		}
 	}
 	// Check we had no leftovers

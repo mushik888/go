@@ -1,6 +1,8 @@
 package methods
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,7 +21,6 @@ func TestTopicFilterMatches(t *testing.T) {
 		Type: xdr.ScValTypeScvU63,
 		U63:  &sixtyfour,
 	}
-	hash := "#"
 	star := "*"
 	for _, tc := range []struct {
 		name     string
@@ -105,6 +106,26 @@ func TestTopicFilterMatches(t *testing.T) {
 			},
 		},
 		{
+			name: "transfer/*/*",
+			filter: []SegmentFilter{
+				{scval: &transfer},
+				{wildcard: &star},
+				{wildcard: &star},
+			},
+			includes: []xdr.ScVec{
+				{transfer, number, number},
+				{transfer, transfer, transfer},
+			},
+			excludes: []xdr.ScVec{
+				{number},
+				{number, number},
+				{number, transfer},
+				{number, transfer, number, number},
+				{transfer},
+				{transfer, transfer, transfer, transfer},
+			},
+		},
+		{
 			name: "transfer/*/number",
 			filter: []SegmentFilter{
 				{scval: &transfer},
@@ -124,130 +145,6 @@ func TestTopicFilterMatches(t *testing.T) {
 				{number, transfer},
 				{transfer, transfer, transfer},
 				{transfer, number, transfer},
-			},
-		},
-
-		// Hash
-		{
-			name: "#",
-			filter: []SegmentFilter{
-				{wildcard: &hash},
-			},
-			includes: []xdr.ScVec{
-				{transfer},
-				{},
-			},
-			excludes: nil,
-		},
-		{
-			name: "#/number",
-			filter: []SegmentFilter{
-				{wildcard: &hash},
-				{scval: &number},
-			},
-			includes: []xdr.ScVec{
-				{number},
-				{number, number},
-				{transfer, number},
-				{transfer, number, number},
-				{transfer, transfer, number},
-				{transfer, number, number, number},
-				{transfer, transfer, transfer, number},
-			},
-			excludes: []xdr.ScVec{
-				{},
-				{transfer},
-				{number, transfer},
-			},
-		},
-		{
-			name: "number/#",
-			filter: []SegmentFilter{
-				{scval: &number},
-				{wildcard: &hash},
-			},
-			includes: []xdr.ScVec{
-				{number},
-				{number, number},
-				{number, transfer},
-				{number, transfer, number},
-				{number, transfer, transfer},
-				{number, transfer, number, number},
-				{number, transfer, transfer, number},
-			},
-			excludes: []xdr.ScVec{
-				{},
-				{transfer},
-				{transfer, number},
-			},
-		},
-		{
-			name: "number/#/#",
-			filter: []SegmentFilter{
-				{scval: &number},
-				{wildcard: &hash},
-				{wildcard: &hash},
-			},
-			includes: []xdr.ScVec{
-				{number},
-				{number, number},
-				{number, transfer},
-				{number, transfer, number},
-				{number, transfer, transfer},
-				{number, transfer, number, number},
-				{number, transfer, transfer, number},
-			},
-			excludes: []xdr.ScVec{
-				{},
-				{transfer},
-				{transfer, number},
-			},
-		},
-		{
-			name: "#/number/#",
-			filter: []SegmentFilter{
-				{wildcard: &hash},
-				{scval: &number},
-				{wildcard: &hash},
-			},
-			includes: []xdr.ScVec{
-				{number},
-				{transfer, number},
-				{number, transfer},
-				{transfer, number, transfer},
-				{number, transfer, transfer, transfer},
-				{transfer, number, transfer, transfer},
-				{transfer, transfer, number, transfer},
-				{transfer, transfer, transfer, number},
-			},
-			excludes: []xdr.ScVec{
-				{},
-				{transfer},
-				{transfer, transfer},
-				{transfer, transfer, transfer},
-				{transfer, transfer, transfer, transfer},
-			},
-		},
-
-		// Hash and Star together
-		{
-			name: "number/#/*",
-			filter: []SegmentFilter{
-				{scval: &number},
-				{wildcard: &hash},
-				{wildcard: &star},
-			},
-			includes: []xdr.ScVec{
-				{number, number},
-				{number, transfer},
-				{number, transfer, number},
-				{number, transfer, transfer},
-				{number, transfer, number, number},
-				{number, transfer, transfer, number},
-			},
-			excludes: []xdr.ScVec{
-				{},
-				{number},
 			},
 		},
 	} {
@@ -277,6 +174,24 @@ func TestTopicFilterMatches(t *testing.T) {
 
 		})
 	}
+}
+
+func TestTopicFilterJSON(t *testing.T) {
+	var got TopicFilter
+
+	assert.NoError(t, json.Unmarshal([]byte("[]"), &got))
+	assert.Equal(t, TopicFilter{}, got)
+
+	star := "*"
+	assert.NoError(t, json.Unmarshal([]byte("[\"*\"]"), &got))
+	assert.Equal(t, TopicFilter{{wildcard: &star}}, got)
+
+	sixtyfour := xdr.Int64(64)
+	scval := xdr.ScVal{Type: xdr.ScValTypeScvU63, U63: &sixtyfour}
+	scvalstr, err := xdr.MarshalBase64(scval)
+	assert.NoError(t, err)
+	assert.NoError(t, json.Unmarshal([]byte(fmt.Sprintf("[%q]", scvalstr)), &got))
+	assert.Equal(t, TopicFilter{{scval: &scval}}, got)
 }
 
 func topicFilterToString(t TopicFilter) string {
