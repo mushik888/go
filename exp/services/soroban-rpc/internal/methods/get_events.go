@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -263,6 +264,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 			return nil, fmt.Errorf("invalid cursor: %s", request.Pagination.Cursor)
 		}
 	}
+	delay := 10 * time.Millisecond
 	for {
 		transactions, err := a.Client.Transactions(horizonclient.TransactionRequest{
 			Order:         horizonclient.Order("asc"),
@@ -271,8 +273,24 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 			IncludeFailed: false,
 		})
 		if err != nil {
-			// TODO: Better error handling/retry here, when we do the real data backend.
-			return nil, err
+			hErr := horizonclient.GetError(err)
+			if hErr != nil && hErr.Response != nil && (hErr.Response.StatusCode == http.StatusTooManyRequests || hErr.Response.StatusCode >= 500) {
+				// rate-limited, or horizon server-side error, we can retry.
+
+				// exponential backoff, to not hammer Horizon
+				delay *= 2
+
+				if delay > time.Second {
+					return nil, err
+				}
+
+				// retry
+				time.Sleep(delay)
+				continue
+			} else {
+				// Unknown error, bail.
+				return nil, err
+			}
 		}
 
 		if len(transactions.Embedded.Records) == 0 {
