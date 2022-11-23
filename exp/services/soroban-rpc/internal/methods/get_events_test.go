@@ -250,6 +250,15 @@ func TestGetEventsRequestValid(t *testing.T) {
 		StartLedger: 0,
 		EndLedger:   0,
 		Filters: []EventFilter{
+			{EventType: "foo"},
+		},
+		Pagination: nil,
+	}).Valid(), "filter 1 invalid: if set, type must be either 'system' or 'contract'")
+
+	assert.EqualError(t, (&GetEventsRequest{
+		StartLedger: 0,
+		EndLedger:   0,
+		Filters: []EventFilter{
 			{ContractIDs: []string{
 				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

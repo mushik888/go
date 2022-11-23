@@ -65,14 +65,6 @@ func (g *GetEventsRequest) Valid() error {
 }
 
 func (g *GetEventsRequest) Matches(event xdr.ContractEvent) bool {
-	if event.Type != xdr.ContractEventTypeContract {
-		// TODO: Should we handle system events? or just contract ones?
-		return false
-	}
-	if event.ContractId == nil {
-		// TODO: again, system events?
-		return false
-	}
 	if len(g.Filters) == 0 {
 		return true
 	}
@@ -85,11 +77,18 @@ func (g *GetEventsRequest) Matches(event xdr.ContractEvent) bool {
 }
 
 type EventFilter struct {
-	ContractIDs []string      `json:"contractIds"`
-	Topics      []TopicFilter `json:"topics"`
+	EventType   string        `json:"type,omitempty"`
+	ContractIDs []string      `json:"contractIds,omitempty"`
+	Topics      []TopicFilter `json:"topics,omitempty"`
 }
 
 func (e *EventFilter) Valid() error {
+	switch e.EventType {
+	case "", "system", "contract":
+		// ok
+	default:
+		return errors.New("if set, type must be either 'system' or 'contract'")
+	}
 	if len(e.ContractIDs) > 5 {
 		return errors.New("maximum 5 contract IDs per filter")
 	}
@@ -112,7 +111,17 @@ func (e *EventFilter) Valid() error {
 
 // TODO: Implement this more efficiently (ideally do it in the real data backend)
 func (e *EventFilter) Matches(event xdr.ContractEvent) bool {
-	return e.matchesContractIDs(event) && e.matchesTopics(event)
+	return e.matchesEventType(event) && e.matchesContractIDs(event) && e.matchesTopics(event)
+}
+
+func (e *EventFilter) matchesEventType(event xdr.ContractEvent) bool {
+	if e.EventType == "contract" && event.Type != xdr.ContractEventTypeContract {
+		return false
+	}
+	if e.EventType == "system" && event.Type != xdr.ContractEventTypeSystem {
+		return false
+	}
+	return true
 }
 
 func (e *EventFilter) matchesContractIDs(event xdr.ContractEvent) bool {
@@ -237,7 +246,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 			IncludeFailed: false,
 		})
 		if err != nil {
-			// TODO: Better error handling/retry here
+			// TODO: Better error handling/retry here, when we do the real data backend.
 			return nil, err
 		}
 
@@ -254,7 +263,6 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 			var meta xdr.TransactionMeta
 			if err := xdr.SafeUnmarshalBase64(transaction.ResultMetaXdr, &meta); err != nil {
 				// Invalid meta back. Eek!
-				// TODO: Better error handling here
 				return nil, err
 			}
 
