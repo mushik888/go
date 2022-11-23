@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/creachadair/jrpc2"
@@ -228,6 +230,11 @@ type EventStore struct {
 	Client *horizonclient.Client
 }
 
+type EventsCursor struct {
+	Toid  string
+	Index int64
+}
+
 func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 	if err := request.Valid(); err != nil {
 		return nil, err
@@ -237,11 +244,29 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 
 	// TODO: Use a more efficient backend here. For now, we stream all ledgers in
 	// the range from horizon, and filter them. This sucks.
-	cursor := toid.New(request.StartLedger, 0, 0).String()
+	cursor := &EventsCursor{
+		Toid:  toid.New(request.StartLedger, 0, 0).String(),
+		Index: 0,
+	}
+	if request.Pagination.Cursor != "" {
+		parts := strings.SplitN(request.Pagination.Cursor, "-", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid cursor: %s", request.Pagination.Cursor)
+		}
+		index, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid cursor")
+		}
+		cursor.Toid = parts[0]
+		cursor.Index = index - 1
+		if cursor.Index < 0 {
+			return nil, fmt.Errorf("invalid cursor: %s", request.Pagination.Cursor)
+		}
+	}
 	for {
 		transactions, err := a.Client.Transactions(horizonclient.TransactionRequest{
 			Order:         horizonclient.Order("asc"),
-			Cursor:        cursor,
+			Cursor:        cursor.Toid,
 			Limit:         200,
 			IncludeFailed: false,
 		})
@@ -252,14 +277,17 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 
 		if len(transactions.Embedded.Records) == 0 {
 			// No transactions found??
-			return nil, fmt.Errorf("no transactions found at cursor: %s", cursor)
+			return nil, fmt.Errorf("no transactions found at cursor: %s", cursor.Toid)
 		}
 
 		for transactionIndex, transaction := range transactions.Embedded.Records {
 			if transaction.Ledger > request.EndLedger {
 				return results, nil
 			}
-			cursor = transaction.PagingToken()
+			cursor.Toid = transaction.PagingToken()
+			// The first time, we drop index-1
+			cursorIndex := cursor.Index
+			cursor.Index = 0
 			var meta xdr.TransactionMeta
 			if err := xdr.SafeUnmarshalBase64(transaction.ResultMetaXdr, &meta); err != nil {
 				// Invalid meta back. Eek!
@@ -268,6 +296,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 
 			v3, ok := meta.GetV3()
 			if !ok {
+				cursor.Index = 0
 				continue
 			}
 
@@ -280,7 +309,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 			// now, so we can use that assumption to build the event id correctly.
 			operationIndex := 0
 
-			for eventIndex, event := range v3.Events {
+			for eventIndex, event := range v3.Events[cursorIndex:] {
 				if request.Matches(event) {
 					v0 := event.Body.MustV0()
 
