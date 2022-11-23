@@ -19,7 +19,7 @@ import (
 )
 
 // MAX_LEDGER_RANGE is the maximum allowed value of endLedger-startLedger
-// TODO: Pick and document a max here. Paul just guessed 4320 as it is ~6hrs
+// Just guessed 4320 as it is ~6hrs
 const MAX_LEDGER_RANGE = 4320
 
 type EventInfo struct {
