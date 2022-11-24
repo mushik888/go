@@ -345,12 +345,12 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 							transaction.Ledger,
 							int32(transactionIndex+1),
 							int32(operationIndex+1),
-						),
+						).ToInt64(),
 						eventIndex+1,
 					)
 
 					// base64-xdr encode the topic
-					topic := make([]string, 4)
+					topic := make([]string, 0, 4)
 					for _, segment := range v0.Topics {
 						seg, err := xdr.MarshalBase64(segment)
 						if err != nil {
