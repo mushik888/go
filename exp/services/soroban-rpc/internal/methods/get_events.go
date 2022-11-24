@@ -249,7 +249,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 		Toid:  toid.New(request.StartLedger, 0, 0).String(),
 		Index: 0,
 	}
-	if request.Pagination.Cursor != "" {
+	if request.Pagination != nil && request.Pagination.Cursor != "" {
 		parts := strings.SplitN(request.Pagination.Cursor, "-", 2)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid cursor: %s", request.Pagination.Cursor)
