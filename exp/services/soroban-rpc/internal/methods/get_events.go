@@ -24,6 +24,7 @@ import (
 const MAX_LEDGER_RANGE = 4320
 
 type EventInfo struct {
+	EventType      string         `json:"type"`
 	Ledger         int32          `json:"ledger,string"`
 	LedgerClosedAt string         `json:"ledgerClosedAt"`
 	ContractID     string         `json:"contractId"`
@@ -331,6 +332,11 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 				if request.Matches(event) {
 					v0 := event.Body.MustV0()
 
+					eventType := "contract"
+					if event.Type != xdr.ContractEventTypeSystem {
+						eventType = "system"
+					}
+
 					// Build a lexically order-able id for this event record. This is
 					// based on Horizon's db2/history.Effect.ID method.
 					id := fmt.Sprintf(
@@ -360,6 +366,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 					}
 
 					results = append(results, EventInfo{
+						EventType:      eventType,
 						Ledger:         ledger,
 						LedgerClosedAt: ledgerClosedAt,
 						ContractID:     hex.EncodeToString((*event.ContractId)[:]),
