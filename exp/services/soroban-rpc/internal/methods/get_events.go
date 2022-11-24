@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/creachadair/jrpc2/code"
 	"github.com/creachadair/jrpc2/handler"
 	"github.com/stellar/go/clients/horizonclient"
+	"github.com/stellar/go/protocols/horizon"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/toid"
 	"github.com/stellar/go/xdr"
@@ -232,9 +234,46 @@ type EventStore struct {
 	Client *horizonclient.Client
 }
 
-type EventsCursor struct {
-	Toid  string
-	Index int64
+// TODO: Extract this to a new package 'eventid'
+// Build a lexically order-able id for this event record. This is
+// based on Horizon's db2/history.Effect.ID method.
+type EventID struct {
+	*toid.ID
+	EventOrder int32
+}
+
+// String returns a string representation of this id
+func (id EventID) String() string {
+	return fmt.Sprintf(
+		"%019d-%010d",
+		id.ToInt64(),
+		id.EventOrder+1,
+	)
+}
+
+func (id *EventID) Parse(input string) error {
+	parts := strings.SplitN(input, "-", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid event id %s", input)
+	}
+
+	// Parse the first part (toid)
+	idInt, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return errors.Wrapf(err, "invalid event id %s", input)
+	}
+	parsed := toid.Parse(idInt)
+	id.ID = &parsed
+
+	// Parse the second part (event order)
+	eventOrder, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return errors.Wrapf(err, "invalid event id %s", input)
+	}
+	// Subtract one to go from the id to the
+	id.EventOrder = int32(eventOrder) - 1
+
+	return nil
 }
 
 func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
@@ -242,34 +281,119 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 		return nil, err
 	}
 
+	finish := toid.AfterLedger(request.EndLedger)
+
 	var results []EventInfo
 
 	// TODO: Use a more efficient backend here. For now, we stream all ledgers in
 	// the range from horizon, and filter them. This sucks.
-	cursor := &EventsCursor{
-		Toid:  toid.New(request.StartLedger, 0, 0).String(),
-		Index: 0,
+	cursor := EventID{
+		ID:         toid.New(request.StartLedger, int32(0), 0),
+		EventOrder: 0,
 	}
 	if request.Pagination != nil && request.Pagination.Cursor != "" {
-		parts := strings.SplitN(request.Pagination.Cursor, "-", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid cursor: %s", request.Pagination.Cursor)
-		}
-		index, err := strconv.ParseInt(parts[1], 10, 64)
-		if err != nil {
-			return nil, errors.Wrap(err, "invalid cursor")
-		}
-		cursor.Toid = parts[0]
-		cursor.Index = index - 1
-		if cursor.Index < 0 {
-			return nil, fmt.Errorf("invalid cursor: %s", request.Pagination.Cursor)
+		if err := cursor.Parse(request.Pagination.Cursor); err != nil {
+			return nil, errors.Wrap(err, "invalid pagination cursor")
 		}
 	}
+	err := a.ForEachTransaction(cursor.ID, finish, func(transaction horizon.Transaction) error {
+		// For the first txn, we might have to skip some events to get the first
+		// after the cursor.
+		eventIndex := cursor.EventOrder
+		cursor.EventOrder = 0
+
+		// parse the txn paging-token, to get the transactionIndex
+		pagingTokenInt, err := strconv.ParseInt(transaction.PagingToken(), 10, 64)
+		if err != nil {
+			return errors.Wrapf(err, "invalid paging token %s", transaction.PagingToken())
+		}
+		pagingToken := toid.Parse(pagingTokenInt)
+
+		var meta xdr.TransactionMeta
+		if err := xdr.SafeUnmarshalBase64(transaction.ResultMetaXdr, &meta); err != nil {
+			// Invalid meta back. Eek!
+			return err
+		}
+
+		v3, ok := meta.GetV3()
+		if !ok {
+			return nil
+		}
+
+		ledger := transaction.Ledger
+		ledgerClosedAt := transaction.LedgerCloseTime.Format(time.RFC3339)
+
+		// TODO: Handle nested events list once
+		// https://github.com/stellar/stellar-xdr/pull/52 is merged. For now the
+		// operationIndex here is a placeholder. There is only one operation for
+		// now, so we can use that assumption to build the event id correctly.
+		// operationIndex := 0
+
+		for eventIndex, event := range v3.Events[eventIndex:] {
+			if request.Matches(event) {
+				v0 := event.Body.MustV0()
+
+				eventType := "contract"
+				if event.Type != xdr.ContractEventTypeSystem {
+					eventType = "system"
+				}
+
+				// Build a lexically order-able id for this event record. This is
+				// based on Horizon's db2/history.Effect.ID method.
+				id := EventID{ID: &pagingToken, EventOrder: int32(eventIndex)}.String()
+
+				// base64-xdr encode the topic
+				topic := make([]string, 0, 4)
+				for _, segment := range v0.Topics {
+					seg, err := xdr.MarshalBase64(segment)
+					if err != nil {
+						return err
+					}
+					topic = append(topic, seg)
+				}
+
+				// base64-xdr encode the data
+				data, err := xdr.MarshalBase64(v0.Data)
+				if err != nil {
+					return err
+				}
+
+				results = append(results, EventInfo{
+					EventType:      eventType,
+					Ledger:         ledger,
+					LedgerClosedAt: ledgerClosedAt,
+					ContractID:     hex.EncodeToString((*event.ContractId)[:]),
+					ID:             id,
+					PagingToken:    id,
+					Topic:          topic,
+					Value:          EventInfoValue{XDR: data},
+				})
+
+				// Check if we've gotten "limit" events
+				if request.Pagination != nil && request.Pagination.Limit > 0 && uint(len(results)) >= request.Pagination.Limit {
+					return io.EOF
+				}
+			}
+		}
+		return nil
+	})
+	if err == io.EOF {
+		err = nil
+	}
+	return results, err
+}
+
+// ForEachTransaction runs f for each transaction in a range from start
+// (inclusive) to finish (exclusive). If f returns any error,
+// ForEachTransaction stops immediately and returns that error.
+func (a EventStore) ForEachTransaction(start, finish *toid.ID, f func(transaction horizon.Transaction) error) error {
 	delay := 10 * time.Millisecond
+	// TODO: Add a forEachTransaction loop abstraction, taking a callback. Would make the eventOrder cursor offset easier to manage and understand.
+	cursor := start
 	for {
 		transactions, err := a.Client.Transactions(horizonclient.TransactionRequest{
 			Order:         horizonclient.Order("asc"),
-			Cursor:        cursor.Toid,
+			Cursor:        cursor.String(),
 			Limit:         200,
 			IncludeFailed: false,
 		})
@@ -282,7 +406,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 				delay *= 2
 
 				if delay > time.Second {
-					return nil, err
+					return err
 				}
 
 				// retry
@@ -290,92 +414,29 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 				continue
 			} else {
 				// Unknown error, bail.
-				return nil, err
+				return err
 			}
 		}
 
 		if len(transactions.Embedded.Records) == 0 {
-			// No transactions found??
-			return nil, fmt.Errorf("no transactions found at cursor: %s", cursor.Toid)
+			// No transactions found, and the query is open-ended, so this must be the end.
+			return nil
 		}
 
-		for transactionIndex, transaction := range transactions.Embedded.Records {
-			if transaction.Ledger > request.EndLedger {
-				return results, nil
+		for _, transaction := range transactions.Embedded.Records {
+			pt, err := strconv.ParseInt(transaction.PagingToken(), 10, 64)
+			if err != nil {
+				return errors.Wrapf(err, "invalid paging token %s", transaction.PagingToken())
 			}
-			cursor.Toid = transaction.PagingToken()
-			// The first time, we drop index-1
-			cursorIndex := cursor.Index
-			cursor.Index = 0
-			var meta xdr.TransactionMeta
-			if err := xdr.SafeUnmarshalBase64(transaction.ResultMetaXdr, &meta); err != nil {
-				// Invalid meta back. Eek!
-				return nil, err
+			if pt >= finish.ToInt64() {
+				// Done!
+				return nil
 			}
+			id := toid.Parse(pt)
+			cursor = &id
 
-			v3, ok := meta.GetV3()
-			if !ok {
-				cursor.Index = 0
-				continue
-			}
-
-			ledger := transaction.Ledger
-			ledgerClosedAt := transaction.LedgerCloseTime.Format(time.RFC3339)
-
-			// TODO: Handle nested events list once
-			// https://github.com/stellar/stellar-xdr/pull/52 is merged. For now the
-			// operationIndex here is a placeholder. There is only one operation for
-			// now, so we can use that assumption to build the event id correctly.
-			operationIndex := 0
-
-			for eventIndex, event := range v3.Events[cursorIndex:] {
-				if request.Matches(event) {
-					v0 := event.Body.MustV0()
-
-					eventType := "contract"
-					if event.Type != xdr.ContractEventTypeSystem {
-						eventType = "system"
-					}
-
-					// Build a lexically order-able id for this event record. This is
-					// based on Horizon's db2/history.Effect.ID method.
-					id := fmt.Sprintf(
-						"%019d-%010d",
-						toid.New(
-							transaction.Ledger,
-							int32(transactionIndex+1),
-							int32(operationIndex+1),
-						).ToInt64(),
-						eventIndex+1,
-					)
-
-					// base64-xdr encode the topic
-					topic := make([]string, 0, 4)
-					for _, segment := range v0.Topics {
-						seg, err := xdr.MarshalBase64(segment)
-						if err != nil {
-							return nil, err
-						}
-						topic = append(topic, seg)
-					}
-
-					// base64-xdr encode the data
-					data, err := xdr.MarshalBase64(v0.Data)
-					if err != nil {
-						return nil, err
-					}
-
-					results = append(results, EventInfo{
-						EventType:      eventType,
-						Ledger:         ledger,
-						LedgerClosedAt: ledgerClosedAt,
-						ContractID:     hex.EncodeToString((*event.ContractId)[:]),
-						ID:             id,
-						PagingToken:    id,
-						Topic:          topic,
-						Value:          EventInfoValue{XDR: data},
-					})
-				}
+			if err := f(transaction); err != nil {
+				return err
 			}
 		}
 	}
