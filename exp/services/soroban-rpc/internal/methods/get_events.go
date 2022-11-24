@@ -231,7 +231,11 @@ type PaginationOptions struct {
 }
 
 type EventStore struct {
-	Client *horizonclient.Client
+	Client TransactionClient
+}
+
+type TransactionClient interface {
+	Transactions(request horizonclient.TransactionRequest) (horizon.TransactionsPage, error)
 }
 
 // TODO: Extract this to a new package 'eventid'
@@ -334,7 +338,7 @@ func (a EventStore) GetEvents(request GetEventsRequest) ([]EventInfo, error) {
 				v0 := event.Body.MustV0()
 
 				eventType := "contract"
-				if event.Type != xdr.ContractEventTypeSystem {
+				if event.Type == xdr.ContractEventTypeSystem {
 					eventType = "system"
 				}
 
@@ -418,11 +422,6 @@ func (a EventStore) ForEachTransaction(start, finish *toid.ID, f func(transactio
 			}
 		}
 
-		if len(transactions.Embedded.Records) == 0 {
-			// No transactions found, and the query is open-ended, so this must be the end.
-			return nil
-		}
-
 		for _, transaction := range transactions.Embedded.Records {
 			pt, err := strconv.ParseInt(transaction.PagingToken(), 10, 64)
 			if err != nil {
@@ -438,6 +437,11 @@ func (a EventStore) ForEachTransaction(start, finish *toid.ID, f func(transactio
 			if err := f(transaction); err != nil {
 				return err
 			}
+		}
+
+		if len(transactions.Embedded.Records) < 200 {
+			// Did not return "limit" transactions, and the query is open-ended, so this must be the end.
+			return nil
 		}
 	}
 }
